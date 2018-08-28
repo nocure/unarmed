@@ -1,0 +1,335 @@
+
+	Notes about running the FTP Client
+
+	The client is based on the eCos ftp client:
+	http://www.ecos.sourceware.org/docs-latest/ref/net-ftpclient.html
+
+	This client uses my own BSD-sockets API which
+	is written for use without OS. 
+	This API will be posted as another task soon.
+	All functions, related to it are prefixed with "cb_" 
+	which derives from "CallBack lwip interface".
+	 
+	The FTP client works pretty well with it. I don't
+	know if it works with lwip's sequential API.
+
+	The client uses FTP passive mode  - both connections 
+	(control and data) are outgoing and therefore there is
+	no problem with firewalls. 
+
+	The FTP client needs a temporary buffer to send
+	and store commands to/from the server over the control
+	connection. It is defined at the top level:
+
+		char msgbuf[81];	(look at ftp_get())
+		
+	Then, every function gets a pointer to it + it's length.
+	This approach consumes stack space, but prevents
+	bugs - we always know wich function has used it and
+	we know that it is free to use it when we get it.
+
+	When the FTP client is finished, we can make this
+	pointer global for the client and point it to
+	malloc()-ated memory, which can be freed once the
+	ftp client application finishes it's work. At this
+	moment this buffer resides in the stack.
+
+
+	When FTPC_SAVE_FILES_FROM_RECV_CALLBACK is 1,
+	I rise a flag for the data socket which instructs
+	the receive callback function to store the data directly in 
+	flash rather than copying it to the application buffer.
+	#define it as 0 if you do not use my API
+
+
+
+	The example functions declare theese objects
+
+	char msgbuf[FTPC_MSG_BUFF]; 
+	int ctrl_s,data_s;							// socket descriptors for control and data connection
+	int ret, bytes;
+
+	struct sockaddr_in local_ipp_ctrl;			// IP + port for control connection on local interface
+	struct sockaddr_in local_ipp_data;			// IP + port for data    connection on local interface
+	struct sockaddr_in remote_ipp_ctrl;			// IP + port for control connection on remote interface
+	struct sockaddr_in remote_ipp_data;			// IP + port for data    connection on remote interface
+
+	SetIPPort(&local_ipp_ctrl, NULL, 0);		// use default local if and random port
+	SetIPPort(&local_ipp_data, NULL, 0);		// use default local if and random port
+	SetIPPort(&remote_ipp_ctrl, hostname, FTP_SERVER_CTRL_PORT);	// port should be 21
+    SetIPPort(&remote_ipp_data, hostname, 0); // port number is known after the PASV command	
+
+
+
+	SetIPPort() is used to init the structures.
+	
+	To do: struct sockaddr_in remote_ipp_ctrl; and struct sockaddr_in remote_ipp_data;
+	consume too much space while the info in them is only the IP and the port.
+	Is there a better way to pass this info?
+	
+	receive_file_MBF() does not work properly when FTPC_SAVE_FILES_FROM_RECV_CALLBACK == 0
+	
+	Note that I work with a GPRS modem where the lag
+	is considerable. Sometimes I get  "226 Transfer OK<CR><LF>"
+	over the control connection while the last part
+	of the transferred file wanders somwhere between
+	the base stations. Currently, this is not an issue.
+	
+	Some examples:
+	
+	1.
+	char file[] = "THIS IS THE NEW FILE";
+	ftp_put("192.168.0.18", "my_name","my_pass","newfile1.txt", file, sizeof(file)); 
+	
+	2.
+	u16_t len = 30;
+	char buff[100];
+	
+	ftp_get("192.168.0.18", "my_name", "my_pass", "upload.dat", NULL, len, DEST_FLASH);
+	ftp_get("192.168.0.18", "my_name", "my_pass", "upload.dat", buff, len, DEST_RAM);
+
+
+	I tested the code mainly with FileZilla FTP server and works
+	good. Other servers send some strange packets when connection is being closed.
+	I'll investigate it later. 
+	
+	
+	Please test and enjoy!
+
+
+Functions and variables you need:
+
+---------------------------------------------------------------------------
+
+// Set address structure
+// Pass NULL ip_addr to set default addr ("0.0.0.0"), 
+void SetIPPort(struct sockaddr_in *ip_addr, const char* ip_str, int port)
+{
+	memset ((char *)ip_addr, 0, sizeof(struct sockaddr_in));
+	ip_addr->sin_family = AF_INET;       
+	if (ip_str != NULL)
+	{
+		ip_addr->sin_addr.s_addr = inet_addr(ip_str);//inet_addr("10.12.110.57"); (returns in Network bytre order :))) 
+		if (ip_addr->sin_addr.s_addr == INADDR_NONE)
+		{
+			if (strcmp(ip_str, "255.255.255.255") == 0)
+				CBSOCK_ERROR("\nASSERT: SetIPPort gets invalid value!\n");
+		}
+	}
+	else 
+	{
+		ip_addr->sin_addr.s_addr = 0;	// inet_addr("0.0.0.0"); // use default output interface
+	}
+
+	ip_addr->sin_port = htons(port);
+
+/*
+	CBSOCK_DEBUG("\n arg ipstring is: [%s], converted: [%s]", ip_str, inet_ntoa(ip_addr->sin_addr)); 
+	CBSOCK_DEBUG("\n addr->sin_addr.s_addr:  %ld, hex: 0x%08X", ip_addr->sin_addr.s_addr, ip_addr->sin_addr.s_addr);
+	CBSOCK_DEBUG("\n addr->sin_port = %d, argument: %d", ntohs(ip_addr->sin_port), port);
+*/
+}
+
+---------------------------------------------------------------------------
+cb_send() : you can implement it with send();
+
+Here is how I do it:
+
+/* Send over stream socket or _connected_ datagram socket
+ *
+ * int send(int sockfd, const void *msg, int len, int flags); //
+ * flags is currently ignored (to do)
+ * return number of bytes sent
+ */
+int cb_send(int sockfd, const void *msg, int len, int flags)
+{
+	unsigned int bytes_sent = 0;
+	err_t err;
+	
+	err = SendTCPData(sockfd, msg, len, &bytes_sent);
+
+	if (err != ERR_OK)	// to do: handle other error codes
+	{
+		CBSOCK_ERROR("\n Err in cb_send(): %d \7 \n", err);
+		//errno = err;
+		return -1;
+	}
+
+	////delete
+	if (bytes_sent != len)
+		CBSOCK_ERROR("\n\n**** cb_send(): wanted %d, sent %d \n\n", len, bytes_sent);
+	//////
+    return bytes_sent;
+}
+-----------------------------------------------------------------
+int cb_close(int sockfd, int how)
+{
+	close(sockfd);
+	// ignore 'how'
+	return 0;
+}
+
+
+
+-----------------------------------------------------------------
+This is my implementation of the BSD's read() function
+I place it here only for reference/
+
+int read (u16_t sockfd, char *src, u16_t len)
+{
+	// http://msdn2.microsoft.com/en-us/library/ms740121.aspx
+	u16_t progress;
+
+	CB_SOCKET_t* ptrSock = &cb_Sockets[sockfd];
+
+	// to do: check if connected; if not --> return -1
+
+	progress = cb_recv(sockfd, src, len, 0);	// default, loop until data received or return 0 if disconnected
+	//progress = cb_recv(sockfd, src, len, CB_RECV_NONBLOCK);	// alternative - non-blocking
+
+
+	if (progress == 0)
+	{
+		// to do: test here if SOCK_FLAGS_DISCONNECTED is set, if not -> return -1
+		// to do: if (pcb->state == CLOSED)...
+		printf("\n remotely disconnected!");
+		ptrSock->flags &= ~CB_SOCK_FLAGS_DISCONNECTED; // reset flag (reinitialize)
+	}
+	
+	return progress;
+}
+-----------------------------------------------------------------
+
+int connect_peer(struct sockaddr_in *ptr_local_ipp, struct sockaddr_in *ptr_remote_ipp)
+
+// Creates a socket for a given local interface and connect through it to remote host
+// return: sockfd of the created socket, or <0 when failed
+// _ipp means (IP + port)
+
+int connect_peer(struct sockaddr_in *ptr_local_ipp, struct sockaddr_in *ptr_remote_ipp)
+{ 
+	int sockfd;
+	err_t err;
+	
+
+	if ((ptr_remote_ipp == NULL) || (ptr_local_ipp == NULL))
+		return -1;
+	
+	sockfd = cb_socket(AF_INET, SOCK_STREAM, 0);			// TCP active connect
+	if (sockfd < 0) 
+	{
+		// to do printf("socket: %s\n",strerror(errno));
+		CBSOCK_DEBUG("\n connect_peer(): failed creating cb_socket! \n");
+		return -1;
+	}
+
+	err = cb_bind(sockfd, ptr_local_ipp, 0);	// 0 -> addrlen, ignored
+	if (err < 0)
+	{
+	    CBSOCK_DEBUG("\n could not bind socket #%d to local ip/port\n", sockfd);
+		cb_close(sockfd, 0);
+		return -1;
+	}
+	
+	err = cb_connect(sockfd, ptr_remote_ipp);
+	
+	if (err < 0)
+	{
+		CBSOCK_DEBUG("\n host not found: %s\n", inet_ntoa(ptr_remote_ipp->sin_addr));
+		cb_close (sockfd, 0);
+		return -1;	
+	}
+
+	CBSOCK_DEBUG("\n connect_peer(): Connected to %s:%d\n",	inet_ntoa(ptr_remote_ipp->sin_addr), ntohs(ptr_remote_ipp->sin_port));
+
+	return (sockfd);	
+}
+
+------------------------------------------------------------------------------------------------
+// Stores data in the MainBoard Flash memory (or anywhere you want)
+int StoreMBFlash(unsigned long addr, char *src, unsigned int len)
+{
+	int i;
+
+	// used by FTP Client app
+	printf("\n \n *********** SAVE IN FLASH @ 0x%08X ***, len = %d *********\n", addr, len);
+	for (i = 0; i < len; i++)	WriteRS1(src[i]);
+    printf("\n \n **************************************************\n");
+	
+	//void WriteFlash(unsigned long addr, void *buf, UINT16 len, UCHAR WriteCrc)
+    WriteFlash(addr, src, len, 0);	// place here your own function here. It's implementation-specific
+
+	return len;
+}
+
+------------------------------------------------------------------------------------------------
+
+Copies a pbuf to the defined by StoreMBFlash() destination
+
+u16_t pbuf2MBFlash(struct pbuf *buf, u32_t flashaddr, u16_t len) // based on pbuf_copy_partial()
+{
+	struct pbuf *p;
+	u16_t left;
+	u16_t buf_copy_len;
+	u16_t copied_total = 0;
+	u32_t newflashaddr = 0;
+
+	left = 0;
+
+	if(buf == NULL) {
+		return 0;
+	}
+
+	/* Note some systems use byte copy if dataptr or one of the pbuf payload pointers are unaligned. */
+	for(p = buf; len != 0 && p != NULL; p = p->next) 
+	{
+		/* copy from this buffer. maybe only partially. */
+		buf_copy_len = p->len;// - offset;
+		if (buf_copy_len > len)
+			buf_copy_len = len;
+			
+		/* copy the necessary parts of the buffer */
+		newflashaddr = flashaddr + left; 
+		StoreMBFlash(newflashaddr, p->payload, buf_copy_len);
+		
+		copied_total += buf_copy_len;
+		left += buf_copy_len;
+		len -= buf_copy_len;
+	}
+	return copied_total;
+}
+----------------------------------------------------------------------------------------------------
+
+Theese should not be needed without the cb_ API
+-------------------------------------------------------------------
+This function is implementation specific. It is called in all loops.
+In fact, you need it only if you use my API. You'll get it soon.
+
+void Idle_cbsocks(unsigned int time)		// run timers
+{	
+	timers_update(NULL);
+    some_integrty_checks();	
+}
+-------------------------------------------------------------------
+-------------------------------------------------------------------
+volatile u32_t TimeoutFTPC;			
+
+It is used to prevent endless loops
+
+If TimeoutFTPC is >0, it is decremented by one every 1 ms
+by the timer interrupt:
+
+if (TimeoutFTPC)
+	TimeoutFTPC--;
+	
+Currently it is used only in get_line(). 
+For get_line you can #undefine FTPC_GETLINE_TIMEOUT_ENABLE.
+
+cb_recv() is from my API. It works pretty like the BSD's read,
+but it's behaviour is modified by flags. In get_line() I use
+it to wait until some data from the server is present.
+
+In other words, do not define FTPC_GETLINE_TIMEOUT_ENABLE until
+you get my cb_ API.
+-------------------------------------------------------------------
+

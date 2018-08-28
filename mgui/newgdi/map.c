@@ -1,0 +1,54 @@
+/*
+** $Id: map.c 7359 2007-08-16 05:08:40Z xgwang $
+**
+** map.c: Mapping operations of GDI.
+**
+** Copyright (C) 2003 ~ 2007 Feynman Software
+** Copyright (C) 2001 ~ 2002 Wei Yongming.
+**
+** Current maintainer: Wei Yongming.
+**
+** Create date: 2000/06/12, derived from original gdi.c
+*/
+
+#include <platform/yl_sys.h>
+
+#include <minigui/common.h>
+#include <minigui/minigui.h>
+#include <minigui/gdi.h>
+#include <minigui/window.h>
+#include "cliprect.h"
+#include "gal.h"
+#include "internals.h"
+#include "ctrlclass.h"
+#include "dc.h"
+
+/****************************** Mapping support ******************************/
+void GUIAPI GetDCLCS (HDC hdc, int which, POINT* pt)
+{
+    PDC pdc;
+
+    pdc = dc_HDC2PDC (hdc);
+
+    if (which < NR_DC_LCS_PTS && which >= 0) {
+        POINT* pts = &pdc->ViewOrig;
+
+        *pt = pts [which];
+    }
+}
+
+void GUIAPI SetDCLCS (HDC hdc, int which, const POINT* pt)
+{
+    PDC pdc;
+
+    if (hdc == HDC_SCREEN)
+        return;
+
+    pdc = dc_HDC2PDC(hdc);
+    if (which < NR_DC_LCS_PTS && which >= 0) {
+        POINT* pts = &pdc->ViewOrig;
+
+        pts [which] = *pt;
+    }
+}
+

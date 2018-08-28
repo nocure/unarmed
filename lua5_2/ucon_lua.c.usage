@@ -1,0 +1,28 @@
+#include <platform/yl_sys.h>
+
+int lua_main (int argc, char **argv);
+int luac_main (int argc, char **argv);
+
+void ucon_lua (int argc, char *argv[]) {
+int ret;
+	ret=lua_main(argc,argv);
+	if (ret) printf("lua exit with error\n");
+}
+
+
+void ucon_luac (int argc, char *argv[]) {
+int ret;
+	ret=luac_main(argc,argv);
+	if (ret) printf("lua compiler exit with error\n");
+}
+
+
+void ucon_lua1 (int argc, char *argv[]) {
+char* cmdbuf;
+	cmdbuf=uconGetCmdBuf();
+	sprintf(cmdbuf,"lua quickluatour.lua");
+	uconExec();
+}
+
+
+

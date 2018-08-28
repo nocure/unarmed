@@ -1,0 +1,170 @@
+Uni-interface multiple stroage Central Resource Depot 
+=====================================================
+
+
+lzhuff compression ratio
+========================
+1024:	889		0.8681640625
+2048:	1731	0.8452148438
+4096:	3297	0.849316406
+
+
+
+
+Resource definition H
+=====================
+############################
+// CRD_V1
+
+		Resource Label
+#define	LABEL			0xaabbbbbb			/// OPT		file_path
+		aa		--> depot number (Hexadecimal)
+		bbbbbb	--> unique resource number per depot
+		///		--> delimiter, must be 3 slashes
+		OPT		--> Option, if left empty, same as BIN.
+					* NOR: Normal operation, LZHuff compressed
+					* BIN: Binary store, unchanged.
+					* RLE: BMP file with Run-Length encoded, BMP file only
+		file	--> The file to be stored. The path can be direct or relative to the working directory
+
+
+#define FILE_1			0x01000001			///	RLE		resource/image/file1.bmp
+#define FILE_2			0x01000002			///	RLE		resource/image/file2.bmp
+#define FILE_3			0x01000003			///	NOR		resource/image/file3.bin
+
+#define FILE_4			0x02000000			///	NOR		resource/data/file1.bin
+#define IMAGE			0x02000001			///	BIN		resource/image/file4.bin
+
+############################
+
+Depot Image format
+==================
+---------------------
+| CRD Info
+----------------------
+| Resource Record
+----------------------
+| Resource Body
+|
+|
+|
+----------------------
+| Resource Body
+|
+|
+|
+
+
+		0	1	2	3	4	5	6	7	8	9	A	B	C	D	E	F
+0000  |CRDSignature|ID|-Num of res----|-Depot Size----|--chunk size---|
+0010  |--0x00000038---|--0x00000400---|--0x00000438---|--0x00000500---|
+0020  |--0x00000938---|--0x00000100---|--0x00000a38---|--0x00000200---|
+0030  |abs res offset-|--res length---|=Resource 1====================>
+0040  ================================================================>
+0050  ================================================================>
+0060  ================================================================>
+						.	.
+						.	.
+						.	.			0x438
+0430  ================================|=Resource 2====================>
+						.	.
+						.	.
+
+Resource Starting Offset:
+	* The least 2 bits are attribute bits.
+	* Always align at 4 bytes
+	* bit0: 0: flat. flat binary
+			1: has index, the starting offset points to a index table
+Resource Length:
+	Total length of the resource
+
+
++----------+
+| chunk    | This table records all size of chunks stored in CRD file 
+|  size    | It's normally smaller the default chunk size(eg. 2048) when compressed. 
+| table    | 2 byte each since a chunk is merely few Ks only 
++----------+
+| chunk    |
+|          |
+| chunk    |
+|          |
+| chunk    |
++----------+
+
+* chunk size is defined in header, eg. 2048 bytes
+
+[Chunk1]
+.
+.
+[Chunk2]
+.
+.
+[Chunk3]
+.
+.
+
+
+
+	
+
+#define DEPOT_MEMORY	1
+#define DEPOT_FILE		2
+#define DEPOT_NAND		3
+
+typedef union {
+    struct {
+        DWORD baseAddr;
+    } memory;
+    struct {
+        FILE *fp;
+    } file;
+    struct {
+    	DWORD startBlock;
+    }
+} DEPOT_PRIVATE;
+
+
+
+typedef struct _HRES {
+
+	int (*read) (struct _HRES, BYTE* buf, int size);
+	int (*seek) (struct _HRES, int off, DWORD where);
+	int (*eof) (struct _HRES);
+	
+	DWORD pointer;	// current pointer
+	DWORD resid;	// resource id
+	DWORD attr;		// attribute
+	
+	DEPOT_PRIVATE priv;
+	
+} HRES;
+
+
+typedef struct _CRDINFO {
+	DWORD depotType;
+	DWORD numRes;
+	DWORD chunkSize;
+	
+	DEPOT_PRIVATE priv;
+	
+} CRDINFO;
+
+int crdRegisterFile(char* file);
+int crdRegisterMem(BYTE* addr);
+int crdRegisterNAND(int startBlock);
+
+
+HRES crdOpenResource(int rid);
+void crdCloseResource(HRES hRes);
+
+int crdRead(BYTE* buf, int size, HRES hRes);
+int crdSeek(HRES hRes, int off, DWORD where);
+int crdTell(HRES hRes);
+
+int crdGet8(HRES hRes, BYTE* buf);
+int crdGet16(HRES hRes, WORD* buf);
+int crdGet32(HRES hRes, DWORD* buf);
+
+int crdPeek8(HRES hRes, BYTE* buf);
+int crdPeek16(HRES hRes, WORD* buf);
+int crdPeek32(HRES hRes, DWORD* buf);
